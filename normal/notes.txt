@@ -1,0 +1,57 @@
+Improve performance of JavaScript normal mapping.
+
+Demo from http://29a.ch/sandbox/2010/normalmapping/
+
+Test environmemt Firefox aurora US. Clear profile.
+
+Observed slow performance (bad framerate) and high CPU usage. 
+
+First profile:
+
+Not very useful most of time spent in drawLight . See Profile 1.json
+
+main/canvas.onmousemove -> drawLight 
+
+Also noticed that the animation is driven by onmousemove rather than RaF. This probably causes excessive drawing.
+
+Next, look at source.
+
+A couple of issues:
+
+* Calls getImageData each frame. Should refactor to remove this
+* canvas.width and canvas.height are accessed each time through the main loop 
+* animation is driven by onmousemove should be driven by RaF. Refactor to log mouse position on mouse move and render on RaF
+
+
+test1:
+
+hoist canvas.width and canvas.height out of main loop. (DOM getter)
+
+
+Result: seems a bit better
+
+
+test2:
+
+only call getImageData once. Result: high CPU, no screen updates. Which would imply onmousemove is calling too often stopping screen updates.
+
+Strangelly enough clamp has now appeared in the profile.
+
+test3:
+
+Refactor code to update location in onmousemove and draw on RaF
+
+This worked well. Framerate high, but CPU still high
+
+
+test4
+
+Try and reduce CPU usage.
+
+comment out putImageData
+
+Result: CPU usage drops from 100% to 75%
+
+Wrap potentially expensive built ins in functions to try and catch time spent inside them
+
+
