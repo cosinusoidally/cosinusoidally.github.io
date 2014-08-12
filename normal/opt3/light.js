@@ -122,6 +122,7 @@ function normalmap(canvasId, texture, normalmap, specularity, shiny) {
         var rect = canvas.getBoundingClientRect();
         moving = true;
         canvas.onmousemove = function(e) {
+           e.stopPropagation();
            mx= e.clientX+50;
            my= e.clientY+50;
            moving = true;
