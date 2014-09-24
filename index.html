@@ -25,8 +25,92 @@
 <a href="/contact">Contact</a>
 <hr>
 </p>
-<h2><u><a name="rewriting-js-snes-player" href="/rewriting-js-snes-player/">Rewriting js-snes-player</a></u></h2><b>(Posted 23rd of September 2014)</b>
-<p>I'm writing this right now (you might want to check back later today/tomorrow.)</p>
+<h2><u><a name="rewriting-js-snes-player" href="/rewriting-js-snes-player/">Rewriting js-snes-player</a></u></h2><b>(Posted 24rd of September 2014)</b>
+<p>tl;dr new <a href="http://cosinusoidally.github.io/snes_spc_js/web_demo/">demo</a></p>
+
+<p>Also, all the code is up on <a href="https://github.com/cosinusoidally/snes_spc_js">https://github.com/cosinusoidally/snes_spc_js</a></p>
+
+<p>A couple of weeks ago I had a go at fixing up an old Emscripten demo called <a href="http://cosinusoidally.github.com/js-snes-player/">js-snes-player</a>. As the name kind of implies it is a SNES music player. To do this I had to patch up the Web Audio API code. I also rebuilt the demo with a newer version of Emscripten and got a nice performance boost. The old demo has a couple of issues:</p>
+
+* Mono playback with 8-bit samples (this makes the generated audio sound bad).<br />
+* Plays at the wrong sample rate. The sound chip emulator outputs samples at 32KHz, but the AudioContext has an implementation dependent sample rate. You cannot change the sample rate of the ScriptProcessorNode (which sends the generated audio samples to the sound card). To fix this I needed to write a pure JavaScript resampler capable of converting the 32KHz audio to whatever the AudioContext's sample rate is.<br />
+* Could not compile the C++ code with O2 optimizations (could only use O1). Code should perform better if I do this. Probably something I did wrong in the way I was keeping symbols alive.<br />
+
+<p>I could have continued hacking on the old codebase to fix these issues, but I thought it probably would be easier to start again from scratch. So, I took the code from the original snes_spc-0.9.0 folder and started again.</p>
+
+<p><b>Getting it going with node.js</b></p>
+
+<p>First step was getting it going in node.js . See demo/play_spc.c . The relevant changes are:</p>
+
+<pre>#include &ltemscripten.h&gt</pre>
+
+<p>which brings in the Emscripten headers, and</p>
+
+<pre>EM_ASM(
+FS.mkdir('/files');
+FS.mount(NODEFS, { root: './files' }, '/files');
+);</pre>
+
+<p>which brings in filesystem access for Emscripten code running in node.js .
+</p>
+<p>To compile I did:</p>
+
+<pre>emcc -O2  -I..  demo_util.c wave_writer.c play_spc.c ../snes_spc/*cpp</pre>
+
+<p>in the demo directory. This generates an a.out.js file and an a.out.js.mem file (I think it's called a memory init file, which I think has something to do with C++ initialisation code).</p>
+
+<p>Next run with node ./a.out.js . This should take the spc file called files/test.spc and generate a 20 second WAV file called files/out.wav . The WAV file can be played back with any media player (I used mplayer). Note the audio data is 32KHz, stereo, 16 bit signed integers (little endian).</p>
+
+<p><b>Getting node to generate raw PCM data</b></p>
+
+<p>tl;dr the script demo/mk_node generates a working node.js decoder.</p>
+<p>Next step was to get node to spit out a continuous stream of raw PCM samples. The code to do this is in play_spc4.c and my3.js . In
+play_spc4.c you'll see that I've created an init function (my_init) and a decode function (my_decode). I've also made sure Emscripten doesn't remove or rename them by marking them "EMSCRIPTEN_KEEPALIVE".</p>
+<p>To build I use:</p>
+
+<pre>emcc -O2 -s NO_EXIT_RUNTIME=1 -I..  demo_util.c wave_writer.c play_spc4.c ../snes_spc/*cpp</pre>
+
+<p>Note that "-s NO_EXIT_RUNTIME=1". Before I added this I was having problems with node terminating before I could call any code. I don't think that what I have done is quite the right fix, but it works.</p>
+
+<p>The file my3.js is where the Emscripten code is called:</p>
+
+<pre>song=fs.readFileSync("files/test.spc");
+spc=allocate(song, 'i8', ALLOC_STACK);
+_my_init(spc,song.length);
+buf_size=16384;
+buf=allocate(new Uint8Array(buf_size*2), 'i8', ALLOC_STACK);
+data=new Buffer(buf_size*2);
+
+out=fs.openSync("out.pcm","a");
+
+while(1){
+_my_decode(buf,buf_size);
+for(var i=0;i&ltbuf_size*2;i++){
+  data[i]=HEAP8[buf+i];
+}
+fs.writeSync(out,data,null,data.length);
+}</pre>
+
+
+<p>The above should be pretty self explanatory. The song lives in files/test.spc . The song is copied in to the Emscripten memory (spc points to that memory). The decoder is initialized with _my_init(spc,song.length); . An output buffer "buf" is created to hold the decoded data. We then spit out data in an infinite loop. _my_decode is called to generate some output data. The data is then pulled out of the Emscripten heap and dumped in to a node.js buffer called "data". The data is then appended to the end of "out.pcm"</p>
+<p>To play back the audio, make a fifo:</p>
+
+<pre>mkfifo out.pcm</pre>
+
+<p>then call:</p>
+
+<pre>node ./spc_node.js &
+aplay -f cd -r 32khz out.pcm</pre>
+
+<p><b>Porting the node.js version to work with the Web Audio API</b></p>
+
+<p>The web version can be generated with demo/mk_web</p>
+<p>The final step was to get the code up and running in the web browser. The code for this is in demo/index.html . If you look in web_demo/ you will see the required files. The song.js file is the song in JSON format. The Emscripten code is in spc_snes.js and spc_snes.js.mem .</p>
+
+<p>The tricky part of the conversion was the resampler. It uses linear interpolation to convert the input data in to whatever the AudioContext requires. There is a slight bug where it occasionally drops 1 sample from the input buffer (I should be generating a non integer number of input samples per frame, but I'm not doing that). This works well enough though.</p>
+
+<p>Anyway, demo is up <a href="http://cosinusoidally.github.io/snes_spc_js/web_demo/">here.</a></p>
+
 <h2><u><a name="whats-the-simplest-way-to-make-a-blog" href="/whats-the-simplest-way-to-make-a-blog/">What's the simplest way to make a blog?</a></u></h2><b>(Posted 20th of August 2014)</b>
 <p>Put a file called myblog.txt on a web server. I think I read that a few years ago on something like <a href="http://www.bash.org/">bash.org</a>. With that in mind, here's my new website.</p>
 <p>I'm going to start making more of an effort to maintain a web presence. I'm currently working on a couple of interesting personal JavaScript projects. I'll be sticking the code up on GitHub and posting write ups here.</p>
